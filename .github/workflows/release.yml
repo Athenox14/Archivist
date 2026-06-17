@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --bin gui --bin archivist
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = "Archivist-x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item target/release/gui.exe       "$dir/"
+          Copy-Item target/release/archivist.exe  "$dir/"
+          Copy-Item README.md                      "$dir/"
+          Compress-Archive -Path "$dir/*" -DestinationPath "$dir.zip" -Force
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Archivist-x86_64-pc-windows-msvc.zip
+          generate_release_notes: true

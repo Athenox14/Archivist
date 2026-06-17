@@ -1,0 +1,14 @@
+/target
+*.onnx
+*.onnx.data
+*.db
+*.db-wal
+*.db-shm
+/models/
+hashes_*.tsv
+*.tsv
+RAPPORT_*.md
+/_e5/
+__pycache__/
+*.pyc
+.claude/
