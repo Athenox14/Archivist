@@ -504,15 +504,27 @@ pub fn populate_from_archive(
         }
     }
 
-    // Passe 3 : textes.
+    // Passe 3 : textes (lecture PLAFONNÉE → un CSV/log de plusieurs Go n'explose
+    // pas la RAM ; seul le début est embeddé, suffisant pour la recherche).
     for (file_id, path, compressed, ext) in &text_jobs {
-        let bytes = read_archive_bytes(path, *compressed, dict.as_deref()).unwrap_or_default();
         let text = if ext == "pdf" {
-            let tmp = std::env::temp_dir().join("archivist_pdf_tmp.pdf");
-            std::fs::write(&tmp, &bytes).ok();
-            extract::extract_text(&tmp).unwrap_or_default()
+            // le .zst pdf doit être déstocké pour pdf-extract ; sinon lecture directe
+            if *compressed {
+                let bytes = read_archive_bytes(path, true, dict.as_deref()).unwrap_or_default();
+                let tmp = std::env::temp_dir().join("archivist_pdf_tmp.pdf");
+                std::fs::write(&tmp, &bytes).ok();
+                extract::extract_text(&tmp).unwrap_or_default()
+            } else {
+                extract::extract_text(path).unwrap_or_default()
+            }
+        } else if *compressed {
+            let bytes = read_archive_bytes(path, true, dict.as_deref()).unwrap_or_default();
+            extract::truncate_text(
+                String::from_utf8_lossy(&bytes).into_owned(),
+                extract::TEXT_MAX,
+            )
         } else {
-            String::from_utf8_lossy(&bytes).into_owned()
+            extract::read_capped(path, extract::TEXT_MAX).unwrap_or_default()
         };
         chunks_embedded += embed_text_str(&db, text_enc.as_mut(), *file_id, &text)?;
         embed_done += 1;
