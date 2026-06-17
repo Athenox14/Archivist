@@ -12,6 +12,16 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use tokenizers::Tokenizer;
 
+/// Plafonne la mémoire d'un décodage image → un en-tête géant/corrompu échoue
+/// proprement au lieu d'allouer des Go (évite le pic RAM / blocage).
+fn decode_limits() -> image::Limits {
+    let mut l = image::Limits::no_limits();
+    l.max_alloc = Some(256 * 1024 * 1024); // 256 Mo max par image
+    l.max_image_width = Some(30_000);
+    l.max_image_height = Some(30_000);
+    l
+}
+
 const SIZE: u32 = 224;
 const CTX: usize = 77;
 // Constantes de normalisation CLIP (RGB).
@@ -39,18 +49,20 @@ impl ClipEncoder {
 
     /// Prétraite une image disque → Vec f32 NCHW [1,3,224,224].
     fn preprocess_image(path: &Path) -> Result<Vec<f32>> {
-        let img = image::open(path)
+        let mut r = image::ImageReader::open(path)
             .with_context(|| format!("open image {}", path.display()))?
-            .to_rgb8();
-        Ok(Self::preprocess_rgb(&img))
+            .with_guessed_format()?;
+        r.limits(decode_limits());
+        Ok(Self::preprocess_rgb(&r.decode()?.to_rgb8()))
     }
 
     /// Idem depuis des octets en mémoire (image décompressée d'une archive).
     fn preprocess_bytes(bytes: &[u8]) -> Result<Vec<f32>> {
-        let img = image::load_from_memory(bytes)
-            .context("décodage image")?
-            .to_rgb8();
-        Ok(Self::preprocess_rgb(&img))
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .context("format image")?;
+        r.limits(decode_limits());
+        Ok(Self::preprocess_rgb(&r.decode()?.to_rgb8()))
     }
 
     fn preprocess_rgb(img: &image::RgbImage) -> Vec<f32> {
