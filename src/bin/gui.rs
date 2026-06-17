@@ -138,6 +138,15 @@ fn decompress(zst: &Path) -> Option<Vec<u8>> {
     zstd::stream::decode_all(std::io::BufReader::new(f)).ok()
 }
 
+/// Charge les octets d'un fichier d'archive : décompresse si `.zst`, sinon lit tel quel.
+fn load_any(path: &Path) -> Option<Vec<u8>> {
+    if path.extension().and_then(|e| e.to_str()) == Some("zst") {
+        decompress(path)
+    } else {
+        std::fs::read(path).ok()
+    }
+}
+
 fn worker(rx: Receiver<Cmd>, tx: Sender<Msg>, ctx: egui::Context) {
     let models = resolve_models();
     let mut clip: Option<ClipEncoder> = None;
@@ -417,8 +426,14 @@ fn worker(rx: Receiver<Cmd>, tx: Sender<Msg>, ctx: egui::Context) {
                         };
                         if let Ok(v) = db.all_image_embeddings() {
                             for (rel, vec) in v {
-                                let zst = root.join(format!("{rel}.zst"));
-                                imgs.push(ImgVec { rel, zst, vec });
+                                // mode stockage = fichier brut ; sinon .zst
+                                let plain = root.join(&rel);
+                                let path = if plain.is_file() {
+                                    plain
+                                } else {
+                                    root.join(format!("{rel}.zst"))
+                                };
+                                imgs.push(ImgVec { rel, zst: path, vec });
                             }
                         }
                         if let Ok(v) = db.all_text_chunks() {
@@ -475,7 +490,7 @@ fn worker(rx: Receiver<Cmd>, tx: Sender<Msg>, ctx: egui::Context) {
                                 rel: e.rel.clone(),
                                 score,
                                 zst: e.zst.clone(),
-                                bytes: decompress(&e.zst),
+                                bytes: load_any(&e.zst),
                             }
                         })
                         .collect();
@@ -538,20 +553,25 @@ struct ImgItem {
     tex: Option<egui::TextureHandle>,
 }
 
-/// Décompresse le .zst dans un dossier temp et ouvre le fichier avec
-/// l'application par défaut de Windows (double-clic sur une vignette).
-fn open_archived(zst: &Path) {
-    let Some(stem) = zst.file_stem().and_then(|s| s.to_str()) else {
+/// Ouvre le fichier avec l'application par défaut (double-clic sur une vignette).
+/// Fichier brut → ouvert directement ; `.zst` → décompressé en temp d'abord.
+fn open_archived(path: &Path) {
+    if path.extension().and_then(|e| e.to_str()) != Some("zst") {
+        let _ = std::process::Command::new("explorer").arg(path).spawn();
+        return;
+    }
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
         return;
     }; // "x.JPG.zst" → "x.JPG"
     let dir = std::env::temp_dir().join("archivist_view");
     let _ = std::fs::create_dir_all(&dir);
     let out = dir.join(stem);
     if !out.exists() {
-        if let Some(bytes) = decompress(zst) {
-            let _ = std::fs::write(&out, bytes);
-        } else {
-            return;
+        match decompress(path) {
+            Some(bytes) => {
+                let _ = std::fs::write(&out, bytes);
+            }
+            None => return,
         }
     }
     let _ = std::process::Command::new("explorer").arg(&out).spawn();
