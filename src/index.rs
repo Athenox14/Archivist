@@ -359,9 +359,18 @@ pub fn verify_integrity(
     Ok(rep)
 }
 
-/// Reconstruit la base de recherche À PARTIR DE L'ARCHIVE (sans la source).
-/// Recense les `.zst`, enregistre les fichiers, ré-embedde images + texte.
-/// Idempotent : saute ce qui a déjà un embedding.
+/// Lit le contenu d'un fichier d'archive (décompresse si `.zst`).
+fn read_archive_bytes(path: &Path, compressed: bool, dict: Option<&[u8]>) -> Option<Vec<u8>> {
+    if compressed {
+        archive::decompress_bytes(path, dict).ok()
+    } else {
+        std::fs::read(path).ok()
+    }
+}
+
+/// Reprend/reconstruit la base de recherche À PARTIR DE L'ARCHIVE (sans la
+/// source, sans re-hash). Gère les archives compressées (`.zst`) ET le stockage
+/// brut. NON destructif : ne ré-embedde QUE ce qui manque → vraie reprise.
 pub fn populate_from_archive(
     cfg: &Config,
     progress: &(dyn Fn(Progress) + Sync),
@@ -370,50 +379,59 @@ pub fn populate_from_archive(
     let dict = std::fs::read(cfg.archive.join(".archivist.dict")).ok();
 
     progress(Progress::Scanning);
-    let mut zsts: Vec<PathBuf> = WalkDir::new(&cfg.archive)
+    // tous les fichiers de l'archive, hors métadonnées internes
+    let mut files: Vec<PathBuf> = WalkDir::new(&cfg.archive)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .map(|e| e.path().to_path_buf())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("zst"))
+        .filter(|p| {
+            let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            !n.starts_with(".archivist.db")
+                && n != ".archivist.dict"
+                && !n.ends_with(".tmp_copy")
+                && !n.ends_with(".zst.tmp")
+        })
         .collect();
-    zsts.sort();
+    files.sort();
 
-    // Passe 1 : enregistre tous les fichiers + classe les jobs d'embedding.
-    let mut image_jobs: Vec<(i64, PathBuf)> = Vec::new();
-    let mut text_jobs: Vec<(i64, PathBuf, String)> = Vec::new();
+    // Passe 1 : enregistre les fichiers (non destructif) + classe le manquant.
+    let mut image_jobs: Vec<(i64, PathBuf, bool)> = Vec::new();
+    let mut text_jobs: Vec<(i64, PathBuf, bool, String)> = Vec::new();
     let mut embed_total = 0usize;
-    for zst in &zsts {
-        let rel_zst = zst
-            .strip_prefix(&cfg.archive)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let rel = rel_zst.strip_suffix(".zst").unwrap_or(&rel_zst).to_string();
-        let meta = std::fs::metadata(zst)?;
+    for path in &files {
+        let rel_raw = path.strip_prefix(&cfg.archive)?.to_string_lossy().replace('\\', "/");
+        let compressed = rel_raw.ends_with(".zst");
+        let rel = if compressed {
+            rel_raw.trim_end_matches(".zst").to_string()
+        } else {
+            rel_raw.clone()
+        };
+        let meta = std::fs::metadata(path)?;
         let mtime = meta
             .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let (file_id, _) = db.upsert_file(&rel, None, meta.len(), mtime)?;
+        let file_id = db.get_or_insert_file(&rel, meta.len(), mtime)?;
         let orig = Path::new(&rel);
         if config::is_image(orig) {
             embed_total += 1;
             if !db.has_image_embedding(file_id)? {
-                image_jobs.push((file_id, zst.clone()));
+                image_jobs.push((file_id, path.clone(), compressed));
             }
         } else if config::is_text(orig) {
             embed_total += 1;
             if !db.has_text_chunks(file_id)? {
                 let ext = config::ext_lower(orig).unwrap_or_default();
-                text_jobs.push((file_id, zst.clone(), ext));
+                text_jobs.push((file_id, path.clone(), compressed, ext));
             }
         }
     }
     log::info!(
-        "{} .zst | {} images à embedder | {} textes",
-        zsts.len(),
+        "{} fichiers | {} images à embedder | {} textes (reste)",
+        files.len(),
         image_jobs.len(),
         text_jobs.len()
     );
@@ -423,24 +441,21 @@ pub fn populate_from_archive(
     let mut images_embedded = 0;
     let mut chunks_embedded = 0;
     let mut embed_done = embed_total - image_jobs.len() - text_jobs.len();
-    progress(Progress::Embed {
-        done: embed_done,
-        total: embed_total,
-    });
+    progress(Progress::Embed { done: embed_done, total: embed_total });
 
-    // Passe 2 : images par lot (décompression parallèle → embed sur octets).
+    // Passe 2 : images par lot (lecture/décompression parallèle → embed octets).
     const BATCH: usize = 16;
     if let Some(enc) = clip.as_mut() {
         for chunk in image_jobs.chunks(BATCH) {
             let datas: Vec<Option<Vec<u8>>> = chunk
                 .par_iter()
-                .map(|(_, z)| archive::decompress_bytes(z, None).ok())
+                .map(|(_, p, c)| read_archive_bytes(p, *c, None))
                 .collect();
             let present: Vec<Vec<u8>> = datas.iter().filter_map(|d| d.clone()).collect();
             match enc.embed_images_bytes(&present) {
                 Ok(embs) => {
                     let mut ei = 0;
-                    for ((file_id, _), d) in chunk.iter().zip(&datas) {
+                    for ((file_id, _, _), d) in chunk.iter().zip(&datas) {
                         if d.is_some() {
                             if let Some(v) = &embs[ei] {
                                 db.insert_image_embedding(*file_id, v)?;
@@ -453,16 +468,13 @@ pub fn populate_from_archive(
                 Err(e) => log::warn!("batch images : {e}"),
             }
             embed_done += chunk.len();
-            progress(Progress::Embed {
-                done: embed_done,
-                total: embed_total,
-            });
+            progress(Progress::Embed { done: embed_done, total: embed_total });
         }
     }
 
-    // Passe 3 : textes (décompression avec dict).
-    for (file_id, zst, ext) in &text_jobs {
-        let bytes = archive::decompress_bytes(zst, dict.as_deref()).unwrap_or_default();
+    // Passe 3 : textes.
+    for (file_id, path, compressed, ext) in &text_jobs {
+        let bytes = read_archive_bytes(path, *compressed, dict.as_deref()).unwrap_or_default();
         let text = if ext == "pdf" {
             let tmp = std::env::temp_dir().join("archivist_pdf_tmp.pdf");
             std::fs::write(&tmp, &bytes).ok();
@@ -472,15 +484,12 @@ pub fn populate_from_archive(
         };
         chunks_embedded += embed_text_str(&db, text_enc.as_mut(), *file_id, &text)?;
         embed_done += 1;
-        progress(Progress::Embed {
-            done: embed_done,
-            total: embed_total,
-        });
+        progress(Progress::Embed { done: embed_done, total: embed_total });
     }
 
     progress(Progress::Done);
     Ok(IndexStats {
-        files_total: zsts.len(),
+        files_total: files.len(),
         canonicals: 0,
         hardlinks: 0,
         images_embedded,

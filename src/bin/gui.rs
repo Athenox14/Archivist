@@ -38,12 +38,7 @@ fn resolve_models() -> Option<PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
         cands.push(cwd.join("models"));
     }
-    cands.push(PathBuf::from(
-        "C:/Users/athen/Nextcloud/Documents/Archivage/models",
-    ));
-    cands
-        .into_iter()
-        .find(|d| d.join("clip_image.onnx").exists())
+    cands.into_iter().find(|d| d.join("clip_image.onnx").exists())
 }
 
 fn find_dbs(parent: &Path) -> Vec<PathBuf> {
@@ -756,11 +751,11 @@ impl App {
             if ui
                 .add_enabled(
                     !self.busy,
-                    egui::Button::new("🛠 Peupler la DB (depuis l'archive)"),
+                    egui::Button::new("⏵ Reprendre (sans re-hash)"),
                 )
                 .on_hover_text(
-                    "Reconstruit la base de recherche à partir des .zst déjà présents, \
-                     sans la source ni recompression.",
+                    "Reprend une indexation stoppée : lit l'archive telle quelle et \
+                     n'embedde QUE ce qui manque. Pas de re-hash, pas besoin de la source.",
                 )
                 .clicked()
             {

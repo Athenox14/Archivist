@@ -157,6 +157,23 @@ impl Db {
         }
     }
 
+    /// Récupère l'id d'un fichier (ou l'insère) SANS toucher aux embeddings
+    /// existants — pour la reprise (populate) qui ne doit rien ré-embedder.
+    pub fn get_or_insert_file(&self, rel_path: &str, size: u64, mtime: i64) -> Result<i64> {
+        let existing: Option<i64> = self
+            .conn
+            .query_row("SELECT id FROM files WHERE rel_path=?1", params![rel_path], |r| r.get(0))
+            .optional()?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        self.conn.execute(
+            "INSERT INTO files (rel_path, hash, size, mtime) VALUES (?1, NULL, ?2, ?3)",
+            params![rel_path, size as i64, mtime],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
     pub fn has_image_embedding(&self, file_id: i64) -> Result<bool> {
         let n: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM image_embeddings WHERE file_id=?1",
