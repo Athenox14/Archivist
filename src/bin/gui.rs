@@ -200,6 +200,14 @@ fn worker(rx: Receiver<Cmd>, tx: Sender<Msg>, ctx: egui::Context) {
                 let prog = move |p: index::Progress| {
                     let (frac, label) = match p {
                         index::Progress::Scanning => (0.0, "Analyse + hash…".to_string()),
+                        index::Progress::Scan { done, total } => (
+                            if total == 0 {
+                                0.0
+                            } else {
+                                done as f32 / total as f32
+                            },
+                            format!("Analyse {done}/{total}"),
+                        ),
                         index::Progress::Compress { done, total } => (
                             if total == 0 {
                                 1.0
@@ -249,7 +257,15 @@ fn worker(rx: Receiver<Cmd>, tx: Sender<Msg>, ctx: egui::Context) {
                 let pctx = ctx.clone();
                 let prog = move |p: index::Progress| {
                     let (frac, label) = match p {
-                        index::Progress::Scanning => (0.0, "Recensement des .zst…".to_string()),
+                        index::Progress::Scanning => (0.0, "Recensement des fichiers…".to_string()),
+                        index::Progress::Scan { done, total } => (
+                            if total == 0 {
+                                0.0
+                            } else {
+                                done as f32 / total as f32
+                            },
+                            format!("Recensement {done}/{total}"),
+                        ),
                         index::Progress::Compress { done, total } => (
                             if total == 0 {
                                 1.0

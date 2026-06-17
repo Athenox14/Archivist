@@ -157,6 +157,31 @@ impl Db {
         }
     }
 
+    /// rel_path → id de TOUS les fichiers (chargement en bloc pour la reprise).
+    pub fn file_id_map(&self) -> Result<std::collections::HashMap<String, i64>> {
+        let mut stmt = self.conn.prepare("SELECT rel_path, id FROM files")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Ensemble des rel_path ayant déjà un embedding image (1 requête).
+    pub fn rels_with_images(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.rel_path FROM files f JOIN image_embeddings e ON f.id = e.file_id",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Ensemble des rel_path ayant déjà des chunks texte (1 requête).
+    pub fn rels_with_text(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT f.rel_path FROM files f JOIN text_chunks c ON f.id = c.file_id",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     /// Récupère l'id d'un fichier (ou l'insère) SANS toucher aux embeddings
     /// existants — pour la reprise (populate) qui ne doit rien ré-embedder.
     pub fn get_or_insert_file(&self, rel_path: &str, size: u64, mtime: i64) -> Result<i64> {

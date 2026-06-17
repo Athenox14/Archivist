@@ -23,6 +23,7 @@ pub struct IndexStats {
 /// Étapes de progression rapportées pendant l'indexation.
 pub enum Progress {
     Scanning,
+    Scan { done: usize, total: usize },
     Compress { done: usize, total: usize },
     Embed { done: usize, total: usize },
     Done,
@@ -395,11 +396,17 @@ pub fn populate_from_archive(
         .collect();
     files.sort();
 
-    // Passe 1 : enregistre les fichiers (non destructif) + classe le manquant.
+    // Chargements en BLOC (3 requêtes) au lieu de 3 requêtes PAR fichier.
+    let id_map = db.file_id_map()?;
+    let img_done = db.rels_with_images()?;
+    let txt_done = db.rels_with_text()?;
+
+    // Passe 1 : classe le manquant (lookups en mémoire, aucun SQL par fichier).
+    let total_files = files.len();
     let mut image_jobs: Vec<(i64, PathBuf, bool)> = Vec::new();
     let mut text_jobs: Vec<(i64, PathBuf, bool, String)> = Vec::new();
     let mut embed_total = 0usize;
-    for path in &files {
+    for (k, path) in files.iter().enumerate() {
         let rel_raw = path
             .strip_prefix(&cfg.archive)?
             .to_string_lossy()
@@ -410,28 +417,44 @@ pub fn populate_from_archive(
         } else {
             rel_raw.clone()
         };
-        let meta = std::fs::metadata(path)?;
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let file_id = db.get_or_insert_file(&rel, meta.len(), mtime)?;
+        // id depuis la map ; insertion (avec stat) seulement si absent (rare en reprise)
+        let file_id = match id_map.get(&rel) {
+            Some(id) => *id,
+            None => {
+                let meta = std::fs::metadata(path)?;
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                db.get_or_insert_file(&rel, meta.len(), mtime)?
+            }
+        };
         let orig = Path::new(&rel);
         if config::is_image(orig) {
             embed_total += 1;
-            if !db.has_image_embedding(file_id)? {
+            if !img_done.contains(&rel) {
                 image_jobs.push((file_id, path.clone(), compressed));
             }
         } else if config::is_text(orig) {
             embed_total += 1;
-            if !db.has_text_chunks(file_id)? {
+            if !txt_done.contains(&rel) {
                 let ext = config::ext_lower(orig).unwrap_or_default();
                 text_jobs.push((file_id, path.clone(), compressed, ext));
             }
         }
+        if k % 2000 == 0 {
+            progress(Progress::Scan {
+                done: k,
+                total: total_files,
+            });
+        }
     }
+    progress(Progress::Scan {
+        done: total_files,
+        total: total_files,
+    });
     log::info!(
         "{} fichiers | {} images à embedder | {} textes (reste)",
         files.len(),
