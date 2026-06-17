@@ -162,7 +162,11 @@ impl Db {
     pub fn get_or_insert_file(&self, rel_path: &str, size: u64, mtime: i64) -> Result<i64> {
         let existing: Option<i64> = self
             .conn
-            .query_row("SELECT id FROM files WHERE rel_path=?1", params![rel_path], |r| r.get(0))
+            .query_row(
+                "SELECT id FROM files WHERE rel_path=?1",
+                params![rel_path],
+                |r| r.get(0),
+            )
             .optional()?;
         if let Some(id) = existing {
             return Ok(id);

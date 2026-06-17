@@ -60,6 +60,7 @@ fn bench_index(c: &mut Criterion) {
                         db_path: archive.join(".archivist.db"),
                         models_dir: PathBuf::from("___absent___"),
                         label: None,
+                        store: false,
                     };
                     index::run(&cfg).unwrap();
                 },

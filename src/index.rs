@@ -400,7 +400,10 @@ pub fn populate_from_archive(
     let mut text_jobs: Vec<(i64, PathBuf, bool, String)> = Vec::new();
     let mut embed_total = 0usize;
     for path in &files {
-        let rel_raw = path.strip_prefix(&cfg.archive)?.to_string_lossy().replace('\\', "/");
+        let rel_raw = path
+            .strip_prefix(&cfg.archive)?
+            .to_string_lossy()
+            .replace('\\', "/");
         let compressed = rel_raw.ends_with(".zst");
         let rel = if compressed {
             rel_raw.trim_end_matches(".zst").to_string()
@@ -441,7 +444,10 @@ pub fn populate_from_archive(
     let mut images_embedded = 0;
     let mut chunks_embedded = 0;
     let mut embed_done = embed_total - image_jobs.len() - text_jobs.len();
-    progress(Progress::Embed { done: embed_done, total: embed_total });
+    progress(Progress::Embed {
+        done: embed_done,
+        total: embed_total,
+    });
 
     // Passe 2 : images par lot (lecture/décompression parallèle → embed octets).
     const BATCH: usize = 16;
@@ -468,7 +474,10 @@ pub fn populate_from_archive(
                 Err(e) => log::warn!("batch images : {e}"),
             }
             embed_done += chunk.len();
-            progress(Progress::Embed { done: embed_done, total: embed_total });
+            progress(Progress::Embed {
+                done: embed_done,
+                total: embed_total,
+            });
         }
     }
 
@@ -484,7 +493,10 @@ pub fn populate_from_archive(
         };
         chunks_embedded += embed_text_str(&db, text_enc.as_mut(), *file_id, &text)?;
         embed_done += 1;
-        progress(Progress::Embed { done: embed_done, total: embed_total });
+        progress(Progress::Embed {
+            done: embed_done,
+            total: embed_total,
+        });
     }
 
     progress(Progress::Done);

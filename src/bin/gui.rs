@@ -38,7 +38,9 @@ fn resolve_models() -> Option<PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
         cands.push(cwd.join("models"));
     }
-    cands.into_iter().find(|d| d.join("clip_image.onnx").exists())
+    cands
+        .into_iter()
+        .find(|d| d.join("clip_image.onnx").exists())
 }
 
 fn find_dbs(parent: &Path) -> Vec<PathBuf> {
@@ -572,11 +574,11 @@ impl App {
         std::thread::spawn(move || worker(cmd_rx, msg_tx, ctx));
         App {
             tab: Tab::Search,
-            source: "F:/BACKUPS/Mac_HD/Img_2017".into(),
-            archive: "E:/archivist".into(),
+            source: String::new(),
+            archive: String::new(),
             level: 9,
             store: false,
-            query: "a photo of a woman".into(),
+            query: String::new(),
             top_k: 12,
             busy: false,
             show_log: false,
@@ -749,10 +751,7 @@ impl App {
                 });
             }
             if ui
-                .add_enabled(
-                    !self.busy,
-                    egui::Button::new("⏵ Reprendre (sans re-hash)"),
-                )
+                .add_enabled(!self.busy, egui::Button::new("⏵ Reprendre (sans re-hash)"))
                 .on_hover_text(
                     "Reprend une indexation stoppée : lit l'archive telle quelle et \
                      n'embedde QUE ce qui manque. Pas de re-hash, pas besoin de la source.",
