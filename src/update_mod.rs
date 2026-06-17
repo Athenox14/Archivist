@@ -9,16 +9,21 @@ pub fn try_update() -> bool {
     if std::env::var("ARCHIVIST_NO_UPDATE").is_ok() {
         return false;
     }
-    let res = self_update::backends::github::Update::configure()
-        .repo_owner(REPO_OWNER)
-        .repo_name(REPO_NAME)
-        .bin_name("gui")
-        .current_version(self_update::cargo_crate_version!())
-        .no_confirm(true)
-        .show_download_progress(false)
-        .build()
-        .and_then(|u| u.update());
-    matches!(res, Ok(s) if s.updated())
+    // self_update peut paniquer (pas de release, réseau, TLS…) → on isole pour
+    // ne jamais empêcher le logiciel de démarrer.
+    std::panic::catch_unwind(|| {
+        let res = self_update::backends::github::Update::configure()
+            .repo_owner(REPO_OWNER)
+            .repo_name(REPO_NAME)
+            .bin_name("gui")
+            .current_version(self_update::cargo_crate_version!())
+            .no_confirm(true)
+            .show_download_progress(false)
+            .build()
+            .and_then(|u| u.update());
+        matches!(res, Ok(s) if s.updated())
+    })
+    .unwrap_or(false)
 }
 
 /// Relance l'exécutable courant puis quitte (après mise à jour).
