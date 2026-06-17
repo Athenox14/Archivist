@@ -12,8 +12,25 @@ pub fn extract_text(path: &Path) -> Result<String> {
         .unwrap_or_default();
     match ext.as_str() {
         "txt" | "md" => Ok(std::fs::read_to_string(path)?),
-        "pdf" => Ok(pdf_extract::extract_text(path)?),
+        // pdf-extract peut PANIQUER sur certains PDF → on isole le panic pour
+        // ne pas tuer l'indexation ; un PDF illisible est simplement sauté.
+        "pdf" => Ok(extract_pdf_safe(path)),
         _ => Ok(String::new()),
+    }
+}
+
+fn extract_pdf_safe(path: &Path) -> String {
+    let p = path.to_path_buf();
+    match std::panic::catch_unwind(|| pdf_extract::extract_text(&p)) {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => {
+            log::warn!("pdf illisible {} : {e}", path.display());
+            String::new()
+        }
+        Err(_) => {
+            log::warn!("pdf-extract a paniqué sur {} (sauté)", path.display());
+            String::new()
+        }
     }
 }
 
