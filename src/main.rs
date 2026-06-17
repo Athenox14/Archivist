@@ -206,6 +206,12 @@ enum Cmd {
         #[arg(long)]
         no_compress: bool,
     },
+    /// Interne : extrait le texte d'UN pdf et l'imprime (isolé en sous-processus).
+    #[command(hide = true)]
+    ExtractPdf {
+        #[arg(long)]
+        path: PathBuf,
+    },
     /// Vérifie l'intégrité de l'archive (re-hash vs hash enregistré → corruption).
     Verify {
         #[arg(long)]
@@ -384,6 +390,11 @@ fn main() -> Result<()> {
 
             em.w.lock().unwrap().flush()?;
             println!("OK : {total} fichiers → {}", outpath.display());
+        }
+        Cmd::ExtractPdf { path } => {
+            use std::io::Write;
+            let text = archivist::extract::extract_pdf_raw(&path);
+            let _ = std::io::stdout().write_all(text.as_bytes());
         }
         Cmd::Verify { archive, db } => {
             let db_path = Config::db_path_for(&archive, db);

@@ -928,7 +928,35 @@ fn load_icon() -> egui::IconData {
     }
 }
 
+/// Chemin du log de crash (à côté de l'exe, sinon dossier temp).
+fn crash_log_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("archivist_crash.log")
+}
+
+/// Écrit toute panic (toutes threads) dans un fichier — sinon invisible (pas de console).
+fn install_panic_logger() {
+    let path = crash_log_path();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let bt = std::backtrace::Backtrace::force_capture();
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Ok(mut f) =
+            std::fs::OpenOptions::new().create(true).append(true).open(&path)
+        {
+            let _ = writeln!(f, "\n=== PANIC @ epoch {secs} ===\n{info}\n{bt}");
+        }
+    }));
+}
+
 fn main() -> eframe::Result<()> {
+    install_panic_logger();
     // mise à jour auto au démarrage
     if update::try_update() {
         update::restart();

@@ -19,20 +19,57 @@ pub fn extract_text(path: &Path) -> Result<String> {
     }
 }
 
-fn extract_pdf_safe(path: &Path) -> String {
+/// Extraction PDF EN MÉMOIRE (appelée dans le sous-processus dédié).
+/// `catch_unwind` couvre les panics simples ; un double-panic/abort fera
+/// planter ce processus enfant — sans toucher au parent.
+pub fn extract_pdf_raw(path: &Path) -> String {
     let p = path.to_path_buf();
-    match std::panic::catch_unwind(|| pdf_extract::extract_text(&p)) {
-        Ok(Ok(text)) => text,
-        Ok(Err(e)) => {
-            log::warn!("pdf illisible {} : {e}", path.display());
-            String::new()
+    std::panic::catch_unwind(|| pdf_extract::extract_text(&p).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// Extraction PDF ROBUSTE : déléguée à un SOUS-PROCESSUS `archivist extract-pdf`.
+/// pdf-extract pouvant *abort* (incatchable en mémoire), l'isoler dans un enfant
+/// garantit que le crash ne tue jamais l'indexation. Repli en mémoire si le
+/// binaire `archivist` est introuvable.
+fn extract_pdf_safe(path: &Path) -> String {
+    match archivist_bin() {
+        Some(bin) => {
+            let mut cmd = std::process::Command::new(bin);
+            cmd.arg("extract-pdf").arg("--path").arg(path);
+            no_window(&mut cmd);
+            match cmd.output() {
+                Ok(out) if out.status.success() => {
+                    String::from_utf8_lossy(&out.stdout).into_owned()
+                }
+                _ => {
+                    log::warn!("extraction pdf échouée/crashée (sautée) : {}", path.display());
+                    String::new()
+                }
+            }
         }
-        Err(_) => {
-            log::warn!("pdf-extract a paniqué sur {} (sauté)", path.display());
-            String::new()
-        }
+        None => extract_pdf_raw(path), // repli best-effort
     }
 }
+
+/// Localise le binaire `archivist` (à côté de l'exe courant, ou l'exe lui-même).
+fn archivist_bin() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    if exe.file_name()?.to_str()?.starts_with("archivist") {
+        return Some(exe);
+    }
+    let name = if cfg!(windows) { "archivist.exe" } else { "archivist" };
+    let cand = exe.parent()?.join(name);
+    cand.exists().then_some(cand)
+}
+
+#[cfg(windows)]
+fn no_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+}
+#[cfg(not(windows))]
+fn no_window(_cmd: &mut std::process::Command) {}
 
 /// Découpe en chunks par paragraphe (séparés par lignes vides), en
 /// fusionnant les courts pour viser ~`target_chars`. Filtre le vide.
